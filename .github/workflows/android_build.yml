@@ -19,18 +19,6 @@ jobs:
         with:
           flutter-version: 3.27.4
 
-      - name: Generate keystore
-        run: |
-          keytool -genkey -v \
-          -keystore android/app/my-release-key.jks \
-          -storepass ${{ secrets.KEYSTORE_PASSWORD }} \
-          -alias ${{ secrets.KEY_ALIAS }} \
-          -keypass ${{ secrets.KEY_PASSWORD }} \
-          -keyalg RSA \
-          -keysize 2048 \
-          -validity 10000 \
-          -dname "CN=GitHub Actions, OU=DevOps, O=MyCompany, L=City, ST=State, C=Country"
-
       - name: Install dependencies
         run: flutter pub get
 
