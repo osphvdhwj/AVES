@@ -19,20 +19,15 @@ jobs:
         with:
           flutter-version: 3.27.4
 
-      - name: Show working directory
-        run: pwd
-
-      - name: List android/app contents
-        run: ls -la android/app
-
       - name: Install dependencies
         run: flutter pub get
 
       - name: Decode Keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > ${{ github.workspace }}/android/app/my-release-key.jks
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/my-release-key.jks
 
       - name: Build APK
         run: flutter build apk --flavor play -t lib/main_play.dart
+        working-directory: ${{ github.workspace }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
