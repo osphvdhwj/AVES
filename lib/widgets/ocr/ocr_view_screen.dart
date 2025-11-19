@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import '../../providers/ocr_provider.dart';
 
@@ -46,7 +45,7 @@ class _OCRViewScreenState extends State<OCRViewScreen> {
           }
 
           if (ocrProvider.error != null) {
-            return Center(child: Text('Error: {ocrProvider.error}'));
+            return Center(child: Text('Error: ${ocrProvider.error}'));
           }
 
           if (ocrProvider.currentResult == null) {
