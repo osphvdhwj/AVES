@@ -34,6 +34,12 @@ jobs:
       - name: Build APK
         run: flutter build apk --flavor play -t lib/main_play.dart
         working-directory: ${{ github.workspace }}
+        env:
+          AVES_STORE_FILE: android/app/my-release-key.jks
+          AVES_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          AVES_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          AVES_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          AVES_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
