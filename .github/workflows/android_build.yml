@@ -31,11 +31,17 @@ jobs:
       - name: Decode Keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/my-release-key.jks
 
+      - name: Verify Keystore Created
+        run: |
+          echo "Checking if keystore exists..."
+          ls -lh android/app/my-release-key.jks
+          echo "Keystore file size: $(stat -c%s android/app/my-release-key.jks) bytes"
+
       - name: Build APK
         run: flutter build apk --flavor play -t lib/main_play.dart
         working-directory: ${{ github.workspace }}
         env:
-          AVES_STORE_FILE: android/app/my-release-key.jks
+          AVES_STORE_FILE: my-release-key.jks
           AVES_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           AVES_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           AVES_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
