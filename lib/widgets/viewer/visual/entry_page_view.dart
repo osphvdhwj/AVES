@@ -409,7 +409,7 @@ class _EntryPageViewState extends State<EntryPageView> with TickerProviderStateM
         VoidCallback? longPressHandler;
         if (canGestureToOtherApps) {
           longPressHandler = _startGlobalDrag;
-        } else if (!entry.isVideo && entry.hasImage) {
+        } else if (!entry.isVideo && entry.isImage) {
           // Only trigger OCR for image entries (not videos)
           longPressHandler = _navigateToOCR;
         }
