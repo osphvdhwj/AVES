@@ -75,7 +75,6 @@ android {
             dimension "store"
             ext.useNdkAbiFilters = true
             applicationIdSuffix ".libre"
-
             packagingOptions {
                 jniLibs.useLegacyPackaging false
             }
