@@ -1,0 +1,72 @@
+name: Build and Release APK
+
+on:
+  push:
+    branches:
+      - feature/add-ocr
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.27.4
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Show working directory
+        run: pwd
+
+      - name: List android/app contents
+        run: ls -la android/app
+
+      - name: Decode Keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/my-release-key.jks
+
+      - name: Verify Keystore Created
+        run: |
+          echo "Checking if keystore exists..."
+          ls -lh android/app/my-release-key.jks
+          echo "Keystore file size: $(stat -c%s android/app/my-release-key.jks) bytes"
+
+      - name: Build APK
+        run: flutter build apk --flavor play -t lib/main_play.dart
+        working-directory: ${{ github.workspace }}
+        env:
+          AVES_STORE_FILE: my-release-key.jks
+          AVES_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          AVES_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          AVES_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          AVES_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aves-app-play-apk
+          path: build/app/outputs/flutter-apk/app-play-release.apk
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: aves-app-play-apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: build/app/outputs/flutter-apk/app-play-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
