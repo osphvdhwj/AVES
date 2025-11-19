@@ -27,6 +27,7 @@ import 'package:aves/widgets/viewer/visual/video/cover.dart';
 import 'package:aves/widgets/viewer/visual/video/subtitle/subtitle.dart';
 import 'package:aves/widgets/viewer/visual/video/swipe_action.dart';
 import 'package:aves/widgets/viewer/visual/video/video_view.dart';
+import 'package:aves/widgets/ocr/ocr_view_screen.dart';
 import 'package:aves_magnifier/aves_magnifier.dart';
 import 'package:aves_model/aves_model.dart';
 import 'package:decorated_icon/decorated_icon.dart';
@@ -402,6 +403,17 @@ class _EntryPageViewState extends State<EntryPageView> with TickerProviderStateM
     return ValueListenableBuilder<bool>(
       valueListenable: AvesApp.canGestureToOtherApps,
       builder: (context, canGestureToOtherApps, child) {
+        // Determine long-press handler:
+        // - For images (not videos): OCR functionality
+        // - When canGestureToOtherApps: global drag takes precedence
+        VoidCallback? longPressHandler;
+        if (canGestureToOtherApps) {
+          longPressHandler = _startGlobalDrag;
+        } else if (!entry.isVideo && entry.hasImage) {
+          // Only trigger OCR for image entries (not videos)
+          longPressHandler = _navigateToOCR;
+        }
+
         return AvesMagnifier(
           // key includes modified date to refresh when the image is modified by metadata (e.g. rotated)
           key: Key('${entry.uri}_${entry.pageId}_${entry.dateModifiedMillis}'),
@@ -423,12 +435,26 @@ class _EntryPageViewState extends State<EntryPageView> with TickerProviderStateM
               _onTap(alignment: alignment);
             }
           },
-          onLongPress: canGestureToOtherApps ? _startGlobalDrag : null,
+          onLongPress: longPressHandler,
           onDoubleTap: onDoubleTap,
           child: child!,
         );
       },
       child: child,
+    );
+  }
+
+  Future<void> _navigateToOCR() async {
+    // Navigate to OCR screen with the current image
+    if (!mounted) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => OCRViewScreen(
+          initialImagePath: entry.path,
+        ),
+      ),
     );
   }
 
