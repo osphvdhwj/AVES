@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
     }
 } else {
     // for release using credentials in environment variables set up by GitHub Actions
-    keystoreProperties["storeFile"] = System.getenv("AVES_STORE_FILE") ?: "android/app/my-release-key.jks"
+    keystoreProperties["storeFile"] = System.getenv("AVES_STORE_FILE") ?: "my-release-key.jks"
     keystoreProperties["storePassword"] = System.getenv("AVES_STORE_PASSWORD") ?: "<NONE>"
     keystoreProperties["keyAlias"] = System.getenv("AVES_KEY_ALIAS") ?: "<NONE>"
     keystoreProperties["keyPassword"] = System.getenv("AVES_KEY_PASSWORD") ?: "<NONE>"
