@@ -22,6 +22,12 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Show working directory
+        run: pwd
+
+      - name: List android/app contents
+        run: ls -la android/app
+
       - name: Decode Keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/my-release-key.jks
 
@@ -39,6 +45,7 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+
     steps:
       - name: Download build artifact
         uses: actions/download-artifact@v3
