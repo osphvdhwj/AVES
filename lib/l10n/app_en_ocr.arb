@@ -1,0 +1,33 @@
+{
+  "ocrFeatureName": "Text Recognition (OCR)",
+  "ocrActivateHint": "Hold on image to extract text",
+  "ocrProcessing": "Extracting text...",
+  "ocrNoTextFound": "No text found in image",
+  "ocrError": "Failed to extract text",
+  "ocrCopySuccess": "Text copied to clipboard",
+  "ocrSelectAll": "Select All",
+  "ocrCopy": "Copy",
+  "ocrShare": "Share",
+  "ocrSearch": "Search",
+  "ocrClose": "Close",
+  "ocrShowBlocks": "Show blocks",
+  "ocrShowAllText": "Show all text",
+  "ocrSettingsTitle": "Text Recognition Settings",
+  "ocrAutoDetect": "Auto-detect text",
+  "ocrAutoDetectSubtitle": "Automatically extract text when viewing images",
+  "ocrOverlayOpacity": "Overlay opacity",
+  "ocrHoldDuration": "Hold duration",
+  "ocrHoldDurationSubtitle": "Milliseconds to hold before activating OCR",
+  "ocrCacheEnabled": "Cache results",
+  "ocrCacheEnabledSubtitle": "Save OCR results for faster access",
+  "ocrClearCache": "Clear OCR cache",
+  "ocrClearCacheConfirm": "Are you sure you want to clear all OCR cache?",
+  "ocrCharactersCopied": "{count} characters copied",
+  "@ocrCharactersCopied": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  }
+}
