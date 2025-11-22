@@ -1,4 +1,5 @@
 {
+  "@@locale": "en",
   "ocrFeatureName": "Text Recognition (OCR)",
   "ocrActivateHint": "Hold on image to extract text",
   "ocrProcessing": "Extracting text...",
