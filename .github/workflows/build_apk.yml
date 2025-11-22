@@ -1,0 +1,30 @@
+name: Build and Release APK
+
+on:
+  push:
+    branches:
+      - feature/ocr-integration
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.4'
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: aves-ocr-integration-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
