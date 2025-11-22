@@ -22,6 +22,9 @@ jobs:
       - name: Generate localizations
         run: flutter gen-l10n
 
+      - name: Regenerate after gen-l10n (workspace fix)
+        run: flutter pub get
+
       - name: Build APK
         run: flutter build apk --release -t lib/main_play.dart --flavor play
 
