@@ -1,4 +1,4 @@
-import 'package:aves/l10n/l10n.dart';
+import 'package:aves/l10ngen/app_localizations.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
