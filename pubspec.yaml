@@ -138,5 +138,5 @@ dev_dependencies:
 flutter:
   assets:
     - assets/
-  generate: true
   uses-material-design: true
+
