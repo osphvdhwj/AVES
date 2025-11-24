@@ -46,6 +46,14 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+// OCR IMPORTS
+import 'package:aves/services/ocr/ocr_service.dart';
+import 'package:aves/widgets/viewer/overlay/ocr_overlay.dart';
+import 'package:aves/widgets/viewer/controls/ocr_notifications.dart';
+import 'package:aves/model/settings/ocr_settings.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 class EntryViewerStack extends StatefulWidget {
   final CollectionLens? collection;
   final AvesEntry initialEntry;
@@ -62,7 +70,12 @@ class EntryViewerStack extends StatefulWidget {
   State<EntryViewerStack> createState() => _EntryViewerStackState();
 }
 
-class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewControllerMixin, FeedbackMixin, TickerProviderStateMixin, RouteAware {
+class _EntryViewerStackState extends State<EntryViewerStack>
+    with
+        EntryViewControllerMixin,
+        FeedbackMixin,
+        TickerProviderStateMixin,
+        RouteAware {
   late int _currentEntryIndex;
   late ValueNotifier<int> _currentVerticalPage;
   late PageController _horizontalPager, _verticalPager;
@@ -80,6 +93,13 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
   bool _isEntryTracked = true;
   Timer? _overlayHidingTimer;
   late ValueNotifier<AvesVideoController?> _playingVideoControllerNotifier;
+
+  // OCR STATE VARIABLES
+  late OCRService _ocrService;
+  OCRSettings? _ocrSettings;
+  final ValueNotifier<RecognizedText?> _ocrResultNotifier = ValueNotifier(null);
+  bool _ocrMode = false;
+  bool _isProcessingOCR = false;
 
   @override
   bool get isViewingImage => _currentVerticalPage.value == imagePage;
@@ -111,13 +131,8 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
       windowService.keepScreenOn(true);
     }
 
-    // make sure initial entry is actually among the filtered collection entries
-    // `initialEntry` may be a dynamic burst entry from another collection lens
-    // so it is, strictly speaking, not contained in the lens used by the viewer,
-    // but it can be found by content ID
     final initialEntry = widget.initialEntry;
     final entry = entries.firstWhereOrNull((entry) => entry.id == initialEntry.id) ?? entries.firstOrNull;
-    // opening hero, with viewer as target
     _heroInfoNotifier.value = EntryHeroInfo(collection, entry);
     entryNotifier = viewerController.entryNotifier;
     entryNotifier.value = entry;
@@ -130,8 +145,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
       final offset = _verticalPageAnimationController.value;
       final delta = (offset - _verticalPager.offset).abs();
       if (delta > precisionErrorTolerance) {
-        // snap instead of animating below pixel dimension so that the vertical drag gesture recognizer
-        // can handle a new gesture as soon as the animation appears to be complete to the user
         if (delta >= 1) {
           _verticalPager.jumpTo(offset);
         } else {
@@ -146,12 +159,10 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
     );
     _overlayButtonScale = CurvedAnimation(
       parent: _overlayAnimationController,
-      // a little bounce at the top
       curve: Curves.easeOutBack,
     );
     _overlayVideoControlScale = CurvedAnimation(
       parent: _overlayAnimationController,
-      // no bounce at the bottom, to avoid video controller displacement
       curve: Curves.easeOutQuad,
     );
     _overlayOpacity = CurvedAnimation(
@@ -171,6 +182,17 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
     );
     _playingVideoControllerNotifier = context.read<VideoConductor>().playingVideoControllerNotifier;
     _playingVideoControllerNotifier.addListener(_onPlayingVideoControllerChanged);
+
+    // Initialize OCR
+    _ocrService = OCRService();
+    _ocrService.initialize().then((_) async {
+      try {
+        _ocrSettings = OCRSettings(await SharedPreferences.getInstance());
+      } catch (e) {
+        debugPrint('[OCR] Failed to load settings: $e');
+      }
+    });
+
     initEntryControllers(entry);
     _registerWidget(widget);
     AvesApp.lifecycleStateNotifier.addListener(_onAppLifecycleStateChanged);
@@ -208,6 +230,10 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
     _stopOverlayHidingTimer();
     AvesApp.lifecycleStateNotifier.removeListener(_onAppLifecycleStateChanged);
     _unregisterWidget(widget);
+
+    // Dispose OCR resources
+    _ocrResultNotifier.dispose();
+    _ocrService.dispose();
     super.dispose();
   }
 
@@ -250,51 +276,52 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
                 onVerticalPageChanged: _onVerticalPageChanged,
                 onHorizontalPageChanged: _onHorizontalPageChanged,
                 onImagePageRequested: () => _goToVerticalPage(imagePage),
-                onViewDisposed: (mainEntry, pageEntry) => viewStateConductor.reset(pageEntry ?? mainEntry),
+                onViewDisposed: (mainEntry, pageEntry) =>
+                    viewStateConductor.reset(pageEntry ?? mainEntry),
               );
-              return StreamBuilder<PiPStatus>(
-                // as of floating v2.0.0, plugin assumes activity and fails when bound via service
-                // so we do not access status stream directly, but check for support first
-                stream: device.supportPictureInPicture ? Floating().pipStatusStream : Stream.value(PiPStatus.disabled),
-                builder: (context, snapshot) {
-                  final pipEnabled = snapshot.data == PiPStatus.enabled;
-                  return ValueListenableBuilder<bool>(
-                    valueListenable: _viewLocked,
-                    builder: (context, locked, child) {
-                      final children = [child!];
-                      if (!pipEnabled) {
-                        if (locked) {
-                          children.addAll([
-                            const Positioned.fill(
-                              child: AbsorbPointer(),
-                            ),
-                            Positioned.fill(
-                              child: GestureDetector(
-                                onTap: () => _overlayVisible.value = !_overlayVisible.value,
+              return _buildOCRGestureWrapper(
+                StreamBuilder<PiPStatus>(
+                  stream: device.supportPictureInPicture
+                      ? Floating().pipStatusStream
+                      : Stream.value(PiPStatus.disabled),
+                  builder: (context, snapshot) {
+                    final pipEnabled = snapshot.data == PiPStatus.enabled;
+                    return ValueListenableBuilder<bool>(
+                      valueListenable: _viewLocked,
+                      builder: (context, locked, child) {
+                        final children = [child!];
+                        if (!pipEnabled) {
+                          if (locked) {
+                            children.addAll([
+                              const Positioned.fill(
+                                child: AbsorbPointer(),
                               ),
-                            ),
-                            _buildViewerLockedBottomOverlay(),
+                              Positioned.fill(
+                                child: GestureDetector(
+                                  onTap: () => _overlayVisible.value =
+                                      !_overlayVisible.value,
+                                ),
+                              ),
+                              _buildViewerLockedBottomOverlay(),
+                            ]);
+                          } else {
+                            children.addAll(
+                                _buildOverlays(availableSize).map(_decorateOverlay));
+                          }
+                          children.addAll([
+                            const TopGestureAreaProtector(),
+                            const SideGestureAreaProtector(),
+                            const BottomGestureAreaProtector(),
                           ]);
-                        } else {
-                          // regular overlay
-                          children.addAll(_buildOverlays(availableSize).map(_decorateOverlay));
                         }
-
-                        children.addAll([
-                          const TopGestureAreaProtector(),
-                          const SideGestureAreaProtector(),
-                          const BottomGestureAreaProtector(),
-                        ]);
-                      }
-
-                      // TODO TLAD [flutter vNext] wrap into `BackdropGroup`
-                      return Stack(
-                        children: children,
-                      );
-                    },
-                    child: viewer,
-                  );
-                },
+                        return Stack(
+                          children: children,
+                        );
+                      },
+                      child: viewer,
+                    );
+                  },
+                ),
               );
             },
           ),
@@ -303,68 +330,115 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
     );
   }
 
-  // route aware
+  // OCR methods
+  Future<void> _performOCR() async {
+    if (_isProcessingOCR) return;
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final route = ModalRoute.of(context);
-    if (route is PageRoute) {
-      AvesApp.pageRouteObserver.subscribe(this, route);
+    final entry = entryNotifier.value;
+    if (entry == null || !entry.isImage) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('OCR only works on images')),
+        );
+      }
+      return;
+    }
+
+    setState(() => _isProcessingOCR = true);
+
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Extracting text...'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    try {
+      final result = await _ocrService.extractText(
+        entry,
+        onError: (error) {
+          debugPrint('[OCR] Error: $error');
+        },
+        onProgress: (progress) {
+          debugPrint('[OCR] Progress: ${(progress * 100).toInt()}%');
+        },
+      );
+
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (result != null && result.text.isNotEmpty) {
+        _ocrResultNotifier.value = result;
+        setState(() => _ocrMode = true);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Found ${result.text.length} characters'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No text found in image'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e, stack) {
+      debugPrint('[OCR] Exception: $e');
+      await reportService.recordError(e, stack);
+
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to extract text: $e'),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isProcessingOCR = false);
     }
   }
 
-  @override
-  void didPopNext() => _overrideSnackBarMargin();
-
-  @override
-  void didPush() => _overrideSnackBarMargin();
-
-  @override
-  void didPop() => _resetSnackBarMargin();
-
-  @override
-  void didPushNext() => _resetSnackBarMargin();
-
-  void _overrideSnackBarMargin() {
-    MarginComputer marginComputer;
-    if (isViewingImage) {
-      marginComputer = (context) => EdgeInsets.only(bottom: ViewerBottomOverlay.actionSafeHeight(context));
-    } else {
-      marginComputer = FeedbackMixin.snackBarMarginDefault;
-    }
-    FeedbackMixin.snackBarMarginOverrideNotifier.value = marginComputer;
+  Widget _buildOCRGestureWrapper(Widget child) {
+    return GestureDetector(
+      onLongPressStart: (isViewingImage && !_viewLocked.value && !_ocrMode)
+          ? (details) async {
+              HapticFeedback.mediumImpact();
+              await _performOCR();
+            }
+          : null,
+      behavior: HitTestBehavior.translucent,
+      excludeFromSemantics: true,
+      child: child,
+    );
   }
-
-  void _resetSnackBarMargin() => FeedbackMixin.snackBarMarginOverrideNotifier.value = null;
-
-  // lifecycle
-
-  // app lifecycle states:
-  // * rotating screen: resumed -> inactive -> resumed
-  // * going home: resumed -> inactive -> hidden -> paused
-  // * back from home: paused -> hidden -> inactive -> resumed
-  // * app switch / settings / etc: resumed -> inactive
-  void _onAppLifecycleStateChanged() {
-    switch (AvesApp.lifecycleStateNotifier.value) {
-      case AppLifecycleState.inactive:
-        // inactive: when losing focus
-        // also triggered when app is rotated on Android API >=33
-        break;
-      case AppLifecycleState.hidden:
-      case AppLifecycleState.paused:
-      case AppLifecycleState.detached:
-        // hidden: transient state between `inactive` and `paused`
-        // paused: when using another app
-        // detached: when app is without a view
-        viewerController.autopilot = false;
-        pauseVideoControllers();
-      case AppLifecycleState.resumed:
-        break;
-    }
-  }
-
-  void _onPlayingVideoControllerChanged() => updatePictureInPicture(context);
 
   Widget _decorateOverlay(Widget overlay) {
     return ValueListenableBuilder<double>(
@@ -390,173 +464,30 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
           _buildSlideshowBottomOverlay(availableSize),
         ];
       default:
-        return [
+        final overlays = [
           _buildViewerTopOverlay(availableSize),
           _buildViewerBottomOverlay(availableSize),
         ];
-    }
-  }
 
-  Widget _buildViewerLockedBottomOverlay() {
-    return TooltipTheme(
-      data: TooltipTheme.of(context).copyWith(
-        preferBelow: false,
-      ),
-      child: ViewerLockedOverlay(
-        animationController: _overlayAnimationController,
-      ),
-    );
-  }
-
-  Widget _buildSlideshowBottomOverlay(Size availableSize) {
-    return TooltipTheme(
-      data: TooltipTheme.of(context).copyWith(
-        preferBelow: false,
-      ),
-      child: Align(
-        alignment: AlignmentDirectional.bottomEnd,
-        child: SlideshowBottomOverlay(
-          animationController: _overlayAnimationController,
-          availableSize: availableSize,
-          viewInsets: _frozenViewInsets,
-          viewPadding: _frozenViewPadding,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildViewerTopOverlay(Size availableSize) {
-    Widget child = ValueListenableBuilder<AvesEntry?>(
-      valueListenable: entryNotifier,
-      builder: (context, mainEntry, child) {
-        if (mainEntry == null) return const SizedBox();
-
-        return SlideTransition(
-          position: _overlayTopOffset,
-          child: ViewerTopOverlay(
-            entries: entries,
-            index: _currentEntryIndex,
-            mainEntry: mainEntry,
-            scale: _overlayButtonScale,
-            hasCollection: hasCollection,
-            expandedNotifier: _overlayExpandedNotifier,
-            availableSize: availableSize,
-            viewInsets: _frozenViewInsets,
-            viewPadding: _frozenViewPadding,
-          ),
-        );
-      },
-    );
-
-    child = ValueListenableBuilder<int>(
-      valueListenable: _currentVerticalPage,
-      builder: (context, page, child) {
-        return Visibility(
-          visible: page == imagePage,
-          child: child!,
-        );
-      },
-      child: child,
-    );
-
-    return child;
-  }
-
-  Widget _buildViewerBottomOverlay(Size availableSize) {
-    Widget child = ValueListenableBuilder<AvesEntry?>(
-      valueListenable: entryNotifier,
-      builder: (context, mainEntry, child) {
-        if (mainEntry == null) return const SizedBox();
-
-        final multiPageController = mainEntry.isMultiPage ? context.read<MultiPageConductor>().getController(mainEntry) : null;
-
-        Widget? _buildExtraBottomOverlay({AvesEntry? pageEntry}) {
-          final targetEntry = pageEntry ?? mainEntry;
-          Widget? child;
-          // a 360 video is both a video and a panorama but only the video controls are displayed
-          if (targetEntry.isPureVideo) {
-            child = Selector<VideoConductor, AvesVideoController?>(
-              selector: (context, vc) => vc.getController(targetEntry),
-              builder: (context, videoController, child) => VideoControlOverlay(
-                entry: targetEntry,
-                controller: videoController,
-                scale: _overlayVideoControlScale,
-                onActionSelected: (action) {
-                  if (videoController != null) {
-                    _onVideoAction(
-                      context: context,
-                      entry: targetEntry,
-                      controller: videoController,
-                      action: action,
-                    );
-                  }
-                },
+        if (_ocrMode && _ocrResultNotifier.value != null) {
+          final entry = entryNotifier.value;
+          if (entry != null) {
+            overlays.add(
+              OCROverlay(
+                entry: entry,
+                recognizedText: _ocrResultNotifier.value!,
+                onClose: () => setState(() {
+                  _ocrMode = false;
+                  _ocrResultNotifier.value = null;
+                }),
+                animation: _overlayAnimationController,
               ),
-            );
-          } else if (targetEntry.is360) {
-            child = PanoramaOverlay(
-              entry: targetEntry,
-              scale: _overlayButtonScale,
             );
           }
-          return child != null
-              ? ExtraBottomOverlay(
-                  viewInsets: _frozenViewInsets,
-                  viewPadding: _frozenViewPadding,
-                  child: child,
-                )
-              : null;
         }
 
-        final extraBottomOverlay = mainEntry.isMultiPage
-            ? PageEntryBuilder(
-                multiPageController: multiPageController,
-                builder: (pageEntry) => _buildExtraBottomOverlay(pageEntry: pageEntry) ?? const SizedBox(),
-              )
-            : _buildExtraBottomOverlay();
-
-        return TooltipTheme(
-          data: TooltipTheme.of(context).copyWith(
-            preferBelow: false,
-          ),
-          child: Column(
-            children: [
-              if (extraBottomOverlay != null) extraBottomOverlay,
-              ViewerBottomOverlay(
-                entries: entries,
-                index: _currentEntryIndex,
-                collection: collection,
-                animationController: _overlayAnimationController,
-                availableSize: availableSize,
-                viewInsets: _frozenViewInsets,
-                viewPadding: _frozenViewPadding,
-                multiPageController: multiPageController,
-              ),
-            ],
-          ),
-        );
-      },
-    );
-
-    child = Selector<MediaQueryData, double>(
-      selector: (context, mq) => mq.size.height,
-      builder: (context, mqHeight, child) {
-        // when orientation change, the `PageController` offset is not updated right away
-        // and it does not trigger its listeners when it does, so we force a refresh in the next frame
-        WidgetsBinding.instance.addPostFrameCallback((_) => _onVerticalPageControllerChanged());
-        return AnimatedBuilder(
-          animation: _verticalScrollNotifier,
-          builder: (context, child) => Positioned(
-            bottom: (_verticalPager.hasClients && _verticalPager.position.hasPixels ? _verticalPager.offset : 0) - availableSize.height,
-            child: child!,
-          ),
-          child: child,
-        );
-      },
-      child: child,
-    );
-
-    return child;
+        return overlays;
+    }
   }
 
   bool _handleNotification(dynamic notification) {
@@ -565,7 +496,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
     } else if (notification is CastNotification) {
       _cast(notification.enabled);
     } else if (notification is FullImageLoadedNotification) {
-      // microtask so that listeners do not trigger during build
       scheduleMicrotask(() {
         if (!mounted) return;
         final viewStateController = context.read<ViewStateConductor>().getController(notification.entry);
@@ -574,8 +504,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
     } else if (notification is EntryDeletedNotification) {
       _onEntryRemoved(context, notification.entries);
     } else if (notification is EntryMovedNotification) {
-      // only add or remove entries following user actions,
-      // instead of applying all collection source changes
       final isBin = collection?.filters.contains(TrashFilter.instance) ?? false;
       final entries = notification.entries;
       switch (notification.moveType) {
@@ -596,9 +524,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
           break;
       }
     } else if (notification is PopupMenuOpenedNotification) {
-      // if the menu is opened while overlay is hiding,
-      // the popup menu button is disposed and menu items are ineffective,
-      // so we make sure overlay stays visible
       _overlayVisible.value = true;
       _videoActionDelegate.stopOverlayHidingTimer();
       dismissFeedback(context);
@@ -633,6 +558,13 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
       _goToHorizontalPageByDelta(delta: 1, animate: notification.animate);
     } else if (notification is ShowEntryNotification) {
       _goToHorizontalPageByIndex(page: notification.index, animate: notification.animate);
+    } else if (notification is TriggerOCRNotification) {
+      _performOCR();
+    } else if (notification is CloseOCRNotification) {
+      setState(() {
+        _ocrMode = false;
+        _ocrResultNotifier.value = null;
+      });
     } else {
       return false;
     }
@@ -724,7 +656,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
         reportService.log('Nav move to Image page');
       case infoPage:
         reportService.log('Nav move to Info page');
-        // prevent hero when viewer is offscreen
         _heroInfoNotifier.value = null;
         if (!animate) {
           _verticalPager.jumpToPage(page);
@@ -750,7 +681,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
       if (_currentEntryIndex != page) {
         final animationDuration = animate ? context.read<DurationsData>().viewerHorizontalPageScrollAnimation : Duration.zero;
         if (animationDuration > Duration.zero) {
-          // duration & curve should feel similar to changing page by fling
           await _horizontalPager.animateToPage(
             page,
             duration: animationDuration,
@@ -789,17 +719,14 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
     }
   }
 
-  // deleted or moved to another album
   void _onEntryRemoved(BuildContext context, Set<AvesEntry> removedEntries) {
     if (removedEntries.isEmpty) return;
 
     if (hasCollection) {
       final collectionEntries = collection!.sortedEntries;
       removedEntries.forEach((removedEntry) {
-        // remove from collection
         if (collectionEntries.remove(removedEntry)) return;
 
-        // remove from burst
         final mainEntry = collectionEntries.firstWhereOrNull((entry) => entry.stackedEntries?.contains(removedEntry) == true);
         if (mainEntry != null) {
           final multiPageController = context.read<MultiPageConductor>().getController(mainEntry);
@@ -824,8 +751,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
 
   Future<void> _updateEntry() async {
     if (entries.isNotEmpty && _currentEntryIndex >= entries.length) {
-      // as of Flutter v1.22.2, `PageView` does not call `onPageChanged` when the last page is deleted
-      // so we manually track the page change, and let the entry update follow
       _onHorizontalPageChanged(entries.length - 1);
       return;
     }
@@ -848,7 +773,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
 
   void _onPopInvoked() {
     if (_currentVerticalPage.value == infoPage) {
-      // back from info to image
       _goToVerticalPage(imagePage);
     } else {
       if (!_isEntryTracked) _trackEntry();
@@ -863,47 +787,33 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
         Navigator.maybeOf(context)?.pop();
       }
 
-      // closing hero, with viewer as source
       final heroInfo = EntryHeroInfo(collection, entryNotifier.value);
       if (_heroInfoNotifier.value != heroInfo) {
         _heroInfoNotifier.value = heroInfo;
-        // we post closing the viewer page so that hero animation source is ready
         WidgetsBinding.instance.addPostFrameCallback((_) => pop());
       } else {
-        // viewer already has correct hero info, no need to rebuild
         pop();
       }
     } else {
-      // exit app when trying to pop a viewer page
       _leaveViewer();
     }
   }
 
   Future<void> _leaveViewer() async {
-    // widgets do not get disposed normally when popping the `SystemNavigator`
-    // so we manually clean video controllers and save playback state
     await context.read<VideoConductor>().dispose();
     await SystemNavigator.pop();
   }
 
-  // track item when returning to collection,
-  // if they are not fully visible already
   void _trackEntry() {
     _isEntryTracked = true;
     final entry = entryNotifier.value;
     if (entry != null && hasCollection) {
-      context.read<HighlightInfo>().trackItem(
-            entry,
-            predicate: (v) => v < 1,
-            animate: false,
-          );
+      context.read<HighlightInfo>().trackItem(entry, predicate: (v) => v < 1, animate: false);
       context.read<ViewerEntryNotifier>().value = entry;
     }
   }
 
   Future<void> _onLeave() async {
-    // get the theme first, as the context is likely
-    // to be unmounted after the other async steps
     final theme = Theme.of(context);
 
     await viewerController.stopCast();
@@ -917,7 +827,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
           await AvesApp.screenBrightness?.setApplicationScreenBrightness(1);
       }
     } on PlatformException catch (e, stack) {
-      // `screen_brightness` plugin may fail
       unawaited(reportService.recordError(e, stack));
     }
     if (settings.keepScreenOn == KeepScreenOn.viewerOnly) {
@@ -929,13 +838,8 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
     if (!settings.useTvLayout) {
       await windowService.requestOrientation();
     }
-    // delay to prevent white/black flash on page transition
-    // from a viewer with a transparent background and no system UI
-    // to a regular page with system UI
     await Future.delayed(const Duration(milliseconds: 50));
   }
-
-  // overlay
 
   Future<void> _initOverlay() async {
     final appMode = context.read<ValueNotifier<AppMode>>().value;
@@ -943,8 +847,6 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
       _overlayVisible.value = false;
       await _onOverlayVisibleChanged(animate: false);
     } else {
-      // wait for MaterialPageRoute.transitionDuration
-      // to show overlay after hero animation is complete
       await Future.delayed(ModalRoute.of(context)!.transitionDuration * timeDilation);
       await _onOverlayVisibleChanged();
     }
@@ -1008,14 +910,11 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
   Future<void> _showSystemUI(BuildContext context, bool show) async {
     final appMode = context.read<ValueNotifier<AppMode>>().value;
     if (appMode == AppMode.screenSaver) {
-      // as of Flutter v3.22.1, calls to `SystemChrome.setEnabledSystemUIMode` hang when app is used as a screen saver
       return;
     }
-
     if (show) {
       await AvesApp.showSystemUI();
     } else {
       await AvesApp.hideSystemUI();
     }
   }
-}
