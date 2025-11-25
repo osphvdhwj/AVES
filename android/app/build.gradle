@@ -59,8 +59,8 @@ android {
         play {
             // Google Play
             dimension "store"
-            // generate a universal APK without x86 native libs
-            ext.useNdkAbiFilters = true
+            // For Play flavor, use --split-per-abi flag in flutter build command
+            // DO NOT set ndk.abiFilters here as it conflicts with split-per-abi
         }
 
         izzy {
@@ -68,8 +68,6 @@ android {
             // check offending libraries with `scanapk`
             // cf https://android.izzysoft.de/articles/named/app-modules-2
             dimension "store"
-            // generate APK by ABI, but NDK ABI filters are incompatible with split APK generation
-            ext.useNdkAbiFilters = false
         }
 
         libre {
@@ -77,16 +75,12 @@ android {
             // check offending libraries with `fdroidserver`
             // cf https://f-droid.org/en/docs/Submitting_to_F-Droid_Quick_Start_Guide/
             dimension "store"
-            // generate APK by ABI, but NDK ABI filters are incompatible with split APK generation
-            ext.useNdkAbiFilters = false
             applicationIdSuffix ".libre"
         }
 
         libre_rom {
             // integration in custom ROM
             dimension "store"
-            // generate a universal APK without x86 native libs
-            ext.useNdkAbiFilters = true
             applicationIdSuffix ".libre"
 
             packagingOptions {
@@ -122,20 +116,9 @@ android {
             }
         }
 
-        android.productFlavors.each { flavor ->
-            def tasks = gradle.startParameter.taskNames.toString().toLowerCase()
-            if (tasks.contains(flavor.name) && flavor.ext.useNdkAbiFilters) {
-                release {
-                    // specify architectures, to specifically exclude native libs for x86,
-                    // which lead to: UnsatisfiedLinkError...couldn't find "libflutter.so"
-                    // cf https://github.com/flutter/flutter/issues/37566#issuecomment-640879500
-                    ndk {
-                        //noinspection ChromeOsAbiSupport
-                        abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64'
-                    }
-                }
-            }
-        }
+        // NOTE: Removed dynamic ndk.abiFilters block that was causing conflicts
+        // When using --split-per-abi flag, Flutter handles ABI filtering automatically
+        // Setting ndk.abiFilters AND using --split-per-abi causes build conflicts
     }
 }
 

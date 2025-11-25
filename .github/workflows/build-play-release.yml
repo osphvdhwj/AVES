@@ -65,6 +65,9 @@ jobs:
       - name: Build Play flavor release APK (split-per-abi)
         run: |
           echo "🔨 Building Play flavor release APK..."
+          echo "Flutter version: $(flutter --version | head -n 1)"
+          echo "Dart version: $(dart --version)"
+          
           flutter build apk \
             --release \
             --flavor play \
@@ -123,6 +126,7 @@ jobs:
           echo "## Build Configuration" >> $GITHUB_STEP_SUMMARY
           echo "- **Flavor**: Play (Google Play Services)" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${{ github.event.inputs.version_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flutter Version**: 3.27.4" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: feature/ocr-integration" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Type**: Release (Signed & Obfuscated)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
