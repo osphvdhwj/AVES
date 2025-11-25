@@ -42,3 +42,8 @@ class OCRModeActivatedNotification extends Notification {
 
   const OCRModeActivatedNotification(this.active);
 }
+
+/// Notification to close OCR overlay
+class CloseOCRNotification extends Notification {
+  const CloseOCRNotification();
+}
