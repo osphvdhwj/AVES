@@ -12,6 +12,7 @@ import 'package:aves/model/highlight.dart';
 import 'package:aves/model/settings/enums/accessibility_timeout.dart';
 import 'package:aves/model/settings/settings.dart';
 import 'package:aves/model/source/collection_lens.dart';
+import 'package:aves/ref/mime_types.dart';
 import 'package:aves/services/common/services.dart';
 import 'package:aves/theme/durations.dart';
 import 'package:aves/widgets/aves_app.dart';
@@ -70,12 +71,7 @@ class EntryViewerStack extends StatefulWidget {
   State<EntryViewerStack> createState() => _EntryViewerStackState();
 }
 
-class _EntryViewerStackState extends State<EntryViewerStack>
-    with
-        EntryViewControllerMixin,
-        FeedbackMixin,
-        TickerProviderStateMixin,
-        RouteAware {
+class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewControllerMixin, FeedbackMixin, TickerProviderStateMixin, RouteAware {
   late int _currentEntryIndex;
   late ValueNotifier<int> _currentVerticalPage;
   late PageController _horizontalPager, _verticalPager;
@@ -276,14 +272,11 @@ class _EntryViewerStackState extends State<EntryViewerStack>
                 onVerticalPageChanged: _onVerticalPageChanged,
                 onHorizontalPageChanged: _onHorizontalPageChanged,
                 onImagePageRequested: () => _goToVerticalPage(imagePage),
-                onViewDisposed: (mainEntry, pageEntry) =>
-                    viewStateConductor.reset(pageEntry ?? mainEntry),
+                onViewDisposed: (mainEntry, pageEntry) => viewStateConductor.reset(pageEntry ?? mainEntry),
               );
               return _buildOCRGestureWrapper(
                 StreamBuilder<PiPStatus>(
-                  stream: device.supportPictureInPicture
-                      ? Floating().pipStatusStream
-                      : Stream.value(PiPStatus.disabled),
+                  stream: device.supportPictureInPicture ? Floating().pipStatusStream : Stream.value(PiPStatus.disabled),
                   builder: (context, snapshot) {
                     final pipEnabled = snapshot.data == PiPStatus.enabled;
                     return ValueListenableBuilder<bool>(
@@ -298,15 +291,13 @@ class _EntryViewerStackState extends State<EntryViewerStack>
                               ),
                               Positioned.fill(
                                 child: GestureDetector(
-                                  onTap: () => _overlayVisible.value =
-                                      !_overlayVisible.value,
+                                  onTap: () => _overlayVisible.value = !_overlayVisible.value,
                                 ),
                               ),
                               _buildViewerLockedBottomOverlay(),
                             ]);
                           } else {
-                            children.addAll(
-                                _buildOverlays(availableSize).map(_decorateOverlay));
+                            children.addAll(_buildOverlays(availableSize).map(_decorateOverlay));
                           }
                           children.addAll([
                             const TopGestureAreaProtector(),
@@ -330,12 +321,66 @@ class _EntryViewerStackState extends State<EntryViewerStack>
     );
   }
 
+  // route aware
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      AvesApp.pageRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void didPopNext() => _overrideSnackBarMargin();
+
+  @override
+  void didPush() => _overrideSnackBarMargin();
+
+  @override
+  void didPop() => _resetSnackBarMargin();
+
+  @override
+  void didPushNext() => _resetSnackBarMargin();
+
+  void _overrideSnackBarMargin() {
+    MarginComputer marginComputer;
+    if (isViewingImage) {
+      marginComputer = (context) => EdgeInsets.only(bottom: ViewerBottomOverlay.actionSafeHeight(context));
+    } else {
+      marginComputer = FeedbackMixin.snackBarMarginDefault;
+    }
+    FeedbackMixin.snackBarMarginOverrideNotifier.value = marginComputer;
+  }
+
+  void _resetSnackBarMargin() => FeedbackMixin.snackBarMarginOverrideNotifier.value = null;
+
+  // lifecycle
+
+  void _onAppLifecycleStateChanged() {
+    switch (AvesApp.lifecycleStateNotifier.value) {
+      case AppLifecycleState.inactive:
+        break;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        viewerController.autopilot = false;
+        pauseVideoControllers();
+      case AppLifecycleState.resumed:
+        break;
+    }
+  }
+
+  void _onPlayingVideoControllerChanged() => updatePictureInPicture(context);
+
   // OCR methods
+
   Future<void> _performOCR() async {
     if (_isProcessingOCR) return;
 
     final entry = entryNotifier.value;
-    if (entry == null || !entry.isImage) {
+    if (entry == null || !MimeTypes.isImage(entry.mimeType)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('OCR only works on images')),
@@ -457,14 +502,14 @@ class _EntryViewerStackState extends State<EntryViewerStack>
     final appMode = context.read<ValueNotifier<AppMode>>().value;
     switch (appMode) {
       case AppMode.screenSaver:
-        return [];
+        return <Widget>[];
       case AppMode.slideshow:
-        return [
+        return <Widget>[
           _buildViewerTopOverlay(availableSize),
           _buildSlideshowBottomOverlay(availableSize),
         ];
       default:
-        final overlays = [
+        final overlays = <Widget>[
           _buildViewerTopOverlay(availableSize),
           _buildViewerBottomOverlay(availableSize),
         ];
@@ -488,6 +533,165 @@ class _EntryViewerStackState extends State<EntryViewerStack>
 
         return overlays;
     }
+  }
+
+  Widget _buildViewerLockedBottomOverlay() {
+    return TooltipTheme(
+      data: TooltipTheme.of(context).copyWith(
+        preferBelow: false,
+      ),
+      child: ViewerLockedOverlay(
+        animationController: _overlayAnimationController,
+      ),
+    );
+  }
+
+  Widget _buildSlideshowBottomOverlay(Size availableSize) {
+    return TooltipTheme(
+      data: TooltipTheme.of(context).copyWith(
+        preferBelow: false,
+      ),
+      child: Align(
+        alignment: AlignmentDirectional.bottomEnd,
+        child: SlideshowBottomOverlay(
+          animationController: _overlayAnimationController,
+          availableSize: availableSize,
+          viewInsets: _frozenViewInsets,
+          viewPadding: _frozenViewPadding,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildViewerTopOverlay(Size availableSize) {
+    Widget child = ValueListenableBuilder<AvesEntry?>(
+      valueListenable: entryNotifier,
+      builder: (context, mainEntry, child) {
+        if (mainEntry == null) return const SizedBox();
+
+        return SlideTransition(
+          position: _overlayTopOffset,
+          child: ViewerTopOverlay(
+            entries: entries,
+            index: _currentEntryIndex,
+            mainEntry: mainEntry,
+            scale: _overlayButtonScale,
+            hasCollection: hasCollection,
+            expandedNotifier: _overlayExpandedNotifier,
+            availableSize: availableSize,
+            viewInsets: _frozenViewInsets,
+            viewPadding: _frozenViewPadding,
+          ),
+        );
+      },
+    );
+
+    child = ValueListenableBuilder<int>(
+      valueListenable: _currentVerticalPage,
+      builder: (context, page, child) {
+        return Visibility(
+          visible: page == imagePage,
+          child: child!,
+        );
+      },
+      child: child,
+    );
+
+    return child;
+  }
+
+  Widget _buildViewerBottomOverlay(Size availableSize) {
+    Widget child = ValueListenableBuilder<AvesEntry?>(
+      valueListenable: entryNotifier,
+      builder: (context, mainEntry, child) {
+        if (mainEntry == null) return const SizedBox();
+
+        final multiPageController = mainEntry.isMultiPage ? context.read<MultiPageConductor>().getController(mainEntry) : null;
+
+        Widget? _buildExtraBottomOverlay({AvesEntry? pageEntry}) {
+          final targetEntry = pageEntry ?? mainEntry;
+          Widget? child;
+          if (targetEntry.isPureVideo) {
+            child = Selector<VideoConductor, AvesVideoController?>(
+              selector: (context, vc) => vc.getController(targetEntry),
+              builder: (context, videoController, child) => VideoControlOverlay(
+                entry: targetEntry,
+                controller: videoController,
+                scale: _overlayVideoControlScale,
+                onActionSelected: (action) {
+                  if (videoController != null) {
+                    _onVideoAction(
+                      context: context,
+                      entry: targetEntry,
+                      controller: videoController,
+                      action: action,
+                    );
+                  }
+                },
+              ),
+            );
+          } else if (targetEntry.is360) {
+            child = PanoramaOverlay(
+              entry: targetEntry,
+              scale: _overlayButtonScale,
+            );
+          }
+          return child != null
+              ? ExtraBottomOverlay(
+                  viewInsets: _frozenViewInsets,
+                  viewPadding: _frozenViewPadding,
+                  child: child,
+                )
+              : null;
+        }
+
+        final extraBottomOverlay = mainEntry.isMultiPage
+            ? PageEntryBuilder(
+                multiPageController: multiPageController,
+                builder: (pageEntry) => _buildExtraBottomOverlay(pageEntry: pageEntry) ?? const SizedBox(),
+              )
+            : _buildExtraBottomOverlay();
+
+        return TooltipTheme(
+          data: TooltipTheme.of(context).copyWith(
+            preferBelow: false,
+          ),
+          child: Column(
+            children: [
+              if (extraBottomOverlay != null) extraBottomOverlay,
+              ViewerBottomOverlay(
+                entries: entries,
+                index: _currentEntryIndex,
+                collection: collection,
+                animationController: _overlayAnimationController,
+                availableSize: availableSize,
+                viewInsets: _frozenViewInsets,
+                viewPadding: _frozenViewPadding,
+                multiPageController: multiPageController,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    child = Selector<MediaQueryData, double>(
+      selector: (context, mq) => mq.size.height,
+      builder: (context, mqHeight, child) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _onVerticalPageControllerChanged());
+        return AnimatedBuilder(
+          animation: _verticalScrollNotifier,
+          builder: (context, child) => Positioned(
+            bottom: (_verticalPager.hasClients && _verticalPager.position.hasPixels ? _verticalPager.offset : 0) - availableSize.height,
+            child: child!,
+          ),
+          child: child,
+        );
+      },
+      child: child,
+    );
+
+    return child;
   }
 
   bool _handleNotification(dynamic notification) {
@@ -918,3 +1122,4 @@ class _EntryViewerStackState extends State<EntryViewerStack>
       await AvesApp.hideSystemUI();
     }
   }
+}
