@@ -44,6 +44,14 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Signing files - NEVER commit these!
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+*.jks
+*.keystore
+key.properties
+
 # screenshot generation
 /test_driver/assets/screenshots/
 /screenshots/

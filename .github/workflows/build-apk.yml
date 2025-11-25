@@ -1,0 +1,42 @@
+name: Build Small Release APKs (Split Per ABI)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build_release_apks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.1"
+
+      - name: Decode Keystore
+        run: echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > android/app/release.jks
+
+      - name: Create key.properties
+        run: |
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=android/app/release.jks
+          EOF
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APKs (split-per-abi)
+        run: flutter build apk --release --flavor play -t lib/main_play.dart --split-per-abi
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: aves-release-apks
+          path: build/app/outputs/flutter-apk/*.apk
+          

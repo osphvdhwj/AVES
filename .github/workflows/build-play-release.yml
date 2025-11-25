@@ -1,0 +1,137 @@
+name: Build Play Flavor Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Version name (e.g., 1.0.0-ocr)'
+        required: false
+        default: 'ocr-build'
+
+jobs:
+  build_play_release:
+    name: Build Play Flavor Release APK
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: feature/ocr-integration
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.4'
+          channel: 'stable'
+          cache: true
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Decode release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "❌ Error: KEYSTORE_B64 secret not set"
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks
+          echo "✅ Keystore decoded successfully"
+          ls -lh android/app/release.jks
+
+      - name: Create key.properties file
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          cat > android/key.properties << EOF
+          storePassword=${KEYSTORE_PASSWORD}
+          keyPassword=${KEY_PASSWORD}
+          keyAlias=${KEY_ALIAS}
+          storeFile=release.jks
+          googleApiKey=${GOOGLE_API_KEY:-<NONE>}
+          EOF
+          echo "✅ key.properties created"
+
+      - name: Build Play flavor release APK
+        run: |
+          echo "🔨 Building Play flavor release APK..."
+          echo "Flutter: $(flutter --version | head -n 1)"
+          echo "Dart: $(dart --version | head -n 1)"
+          
+          flutter build apk \
+            --release \
+            --flavor play \
+            --target lib/main_play.dart \
+            --split-per-abi \
+            --obfuscate \
+            --split-debug-info=build/app/outputs/symbols
+          
+          echo ""
+          echo "✅ Build completed!"
+          echo "APK files generated:"
+          ls -lh build/app/outputs/flutter-apk/*.apk
+
+      - name: Upload arm64-v8a APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aves-play-arm64-v8a-${{ github.event.inputs.version_name }}
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-play-release.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload armeabi-v7a APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aves-play-armeabi-v7a-${{ github.event.inputs.version_name }}
+          path: build/app/outputs/flutter-apk/app-armeabi-v7a-play-release.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload x86_64 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aves-play-x86_64-${{ github.event.inputs.version_name }}
+          path: build/app/outputs/flutter-apk/app-x86_64-play-release.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Generate build summary
+        run: |
+          echo "# 🎉 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flavor**: Play (Google Play Services)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ github.event.inputs.version_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flutter**: 3.27.4" >> $GITHUB_STEP_SUMMARY
+          echo "- **Type**: Release (Signed & Obfuscated)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Features" >> $GITHUB_STEP_SUMMARY
+          echo "✅ ML Kit OCR (Google Play Services)" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Google Lens-style overlay" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Text selection & actions" >> $GITHUB_STEP_SUMMARY
+          echo "✅ 5 language families supported" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## APK Files" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh build/app/outputs/flutter-apk/*.apk >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📥 Download" >> $GITHUB_STEP_SUMMARY
+          echo "**Recommended**: arm64-v8a APK for modern Android devices" >> $GITHUB_STEP_SUMMARY
+
+      - name: Clean up
+        if: always()
+        run: |
+          rm -f android/app/release.jks android/key.properties
+          echo "✅ Cleanup completed"
