@@ -193,6 +193,17 @@ dependencies {
     implementation 'com.github.deckerst:pixymeta-android:f4513291b7'
     implementation project(':exifinterface')
 
+    // ML Kit Text Recognition - Unbundled (via Google Play Services)
+    // Using unbundled to keep app size smaller (~260KB vs ~4MB per architecture)
+    // Models are downloaded dynamically via Google Play Services
+    // CRITICAL: Include ALL language variants to prevent R8 build errors
+    // See: https://github.com/flutter-ml/google_ml_kit_flutter/issues/528
+    implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.1'
+    implementation 'com.google.android.gms:play-services-mlkit-text-recognition-chinese:16.0.1'
+    implementation 'com.google.android.gms:play-services-mlkit-text-recognition-devanagari:16.0.1'
+    implementation 'com.google.android.gms:play-services-mlkit-text-recognition-japanese:16.0.1'
+    implementation 'com.google.android.gms:play-services-mlkit-text-recognition-korean:16.0.1'
+
     testImplementation 'org.junit.jupiter:junit-jupiter-engine:6.0.0'
 
     ksp "com.github.bumptech.glide:ksp:$glide_version"
