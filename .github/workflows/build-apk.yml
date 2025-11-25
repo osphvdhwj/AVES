@@ -1,37 +1,42 @@
-name: Build APK and Generate App Bundle
+name: Build Small Release APKs (Split Per ABI)
 
 on:
-  push:
-    branches:
-      - feature/ocr-integration
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build APK
+  build_release_apks:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Source
+      - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Setup Flutter
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.4'
+          flutter-version: "3.22.1"
+
+      - name: Decode Keystore
+        run: echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > android/app/release.jks
+
+      - name: Create key.properties
+        run: |
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          storeFile=android/app/release.jks
+          EOF
 
       - name: Install dependencies
         run: flutter pub get
-        env:
-          FLUTTER_DISABLE_ANALYTICS: 'true'
 
-      - name: Build APK (Play flavor - Debug)
-        run: flutter build apk --debug --flavor play -t lib/main_play.dart
-        env:
-          FLUTTER_DISABLE_ANALYTICS: 'true'
+      - name: Build release APKs (split-per-abi)
+        run: flutter build apk --release --flavor play -t lib/main_play.dart --split-per-abi
 
-      - name: Upload APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: aves-ocr-debug-apk
-          path: build/app/outputs/flutter-apk/app-play-debug.apk
+          name: aves-release-apks
+          path: build/app/outputs/flutter-apk/*.apk
+          
