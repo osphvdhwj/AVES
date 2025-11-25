@@ -43,10 +43,10 @@ jobs:
             echo "❌ Error: KEYSTORE_B64 secret not set"
             exit 1
           fi
-          # Save to android/ directory (not android/app/)
-          echo "$KEYSTORE_B64" | base64 -d > android/release.jks
+          # Save to android/app/ directory (where Gradle expects it)
+          echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks
           echo "✅ Keystore decoded successfully"
-          ls -lh android/release.jks
+          ls -lh android/app/release.jks
 
       - name: Create key.properties file
         env:
@@ -59,18 +59,20 @@ jobs:
           storePassword=${KEYSTORE_PASSWORD}
           keyPassword=${KEY_PASSWORD}
           keyAlias=${KEY_ALIAS}
-          storeFile=app/release.jks
+          storeFile=release.jks
           googleApiKey=${GOOGLE_API_KEY:-<NONE>}
           EOF
           echo "✅ key.properties created"
-          cat android/key.properties
+          echo "Contents of key.properties (passwords hidden):"
+          cat android/key.properties | sed 's/Password=.*/Password=****/g'
 
       - name: Build Play flavor release APK (split-per-abi)
         run: |
           echo "🔨 Building Play flavor release APK..."
           echo "Flutter version: $(flutter --version | head -n 1)"
           echo "Dart version: $(dart --version)"
-          echo "Keystore location: $(ls -lh android/release.jks)"
+          echo "Keystore exists: $(ls -lh android/app/release.jks)"
+          echo "Working directory: $(pwd)"
           
           flutter build apk \
             --release \
@@ -154,7 +156,6 @@ jobs:
       - name: Clean up sensitive files
         if: always()
         run: |
-          rm -f android/release.jks
           rm -f android/app/release.jks
           rm -f android/key.properties
           echo "✅ Cleanup completed"
