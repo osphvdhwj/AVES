@@ -49,7 +49,7 @@ import 'package:provider/provider.dart';
 
 // OCR IMPORTS
 import 'package:aves/services/ocr/ocr_service.dart';
-import 'package:aves/widgets/viewer/overlay/ocr_overlay.dart';
+import 'package:aves/widgets/viewer/overlay/ocr_lens_overlay.dart';
 import 'package:aves/widgets/viewer/controls/ocr_notifications.dart';
 import 'package:aves/model/settings/ocr_settings.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
@@ -141,8 +141,7 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
       final offset = _verticalPageAnimationController.value;
       final delta = (offset - _verticalPager.offset).abs();
       if (delta > precisionErrorTolerance) {
-        if (delta >= 1) {
-          _verticalPager.jumpTo(offset);
+        if (delta >= 1) {                  _verticalPager.jumpTo(offset);
         } else {
           _verticalPageAnimationController.stop();
           _verticalPager.jumpToPage(_verticalPager.page!.round());
@@ -518,7 +517,7 @@ class _EntryViewerStackState extends State<EntryViewerStack> with EntryViewContr
           final entry = entryNotifier.value;
           if (entry != null) {
             overlays.add(
-              OCROverlay(
+              OCRLensOverlay(
                 entry: entry,
                 recognizedText: _ocrResultNotifier.value!,
                 onClose: () => setState(() {
