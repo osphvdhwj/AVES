@@ -26,7 +26,7 @@ jobs:
           FLUTTER_DISABLE_ANALYTICS: 'true'
 
       - name: Build APK (Play flavor)
-        run: flutter build apk --release --flavor play
+        run: flutter build apk --release --flavor play -t lib/main_play.dart
         env:
           FLUTTER_DISABLE_ANALYTICS: 'true'
 
