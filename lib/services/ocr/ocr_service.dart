@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:aves/model/entry/entry.dart';
+import 'package:aves/ref/mime_types.dart';
 import 'package:aves/services/common/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
@@ -50,7 +51,7 @@ class OCRService {
     Function(double)? onProgress,
   }) async {
     await initialize();
-    if (!AppFlavor.current.supportsOCR) {
+    if (!ExtraAppFlavor.current.supportsOCR) {
       onError?.call('OCR not available in this build variant');
       return null;
     }
@@ -60,7 +61,7 @@ class OCRService {
         debugPrint('[OCR] Cache hit for entry ${entry.id}');
         return cached;
       }
-      if (!entry.isImage) {
+      if (!MimeTypes.isImage(entry.mimeType)) {
         final error = 'Entry is not an image';
         onError?.call(error);
         return null;
