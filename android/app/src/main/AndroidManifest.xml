@@ -346,5 +346,13 @@
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"
             android:value="false" />
+
+        <!-- ML Kit OCR Model Auto-Download Configuration -->
+        <!-- Automatically download ML Kit text recognition models on app install from Play Store -->
+        <!-- This prevents first-run latency and ensures models are ready when OCR is first used -->
+        <!-- See: https://developers.google.com/ml-kit/vision/text-recognition/v2/android#model-download -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr,ocr_chinese,ocr_devanagari,ocr_japanese,ocr_korean" />
     </application>
 </manifest>
