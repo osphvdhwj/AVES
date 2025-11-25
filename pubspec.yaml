@@ -110,6 +110,7 @@ dependencies:
   proj4dart:
   provider:
   screen_brightness:
+  share_plus:
   shared_preferences:
   shelf:
   smooth_page_indicator:
