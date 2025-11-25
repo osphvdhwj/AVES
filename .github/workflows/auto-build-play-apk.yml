@@ -94,6 +94,7 @@ jobs:
             --split-debug-info=build/app/outputs/symbols
           
           echo "✅ Build completed!"
+          echo "APK files generated:"
           ls -lh build/app/outputs/flutter-apk/*.apk
 
       - name: Rename APK files
@@ -102,6 +103,9 @@ jobs:
           SHORT_SHA="${{ steps.commit_info.outputs.short_sha }}"
           DATE="${{ steps.commit_info.outputs.date }}"
           cd build/app/outputs/flutter-apk
+          
+          echo "Files before rename:"
+          ls -lh *.apk
           
           for apk in app-play-*-release.apk; do
             if [ -f "$apk" ]; then
@@ -114,12 +118,16 @@ jobs:
               echo "   Size: $SIZE"
             fi
           done
+          
+          echo ""
+          echo "Files after rename:"
+          ls -lh *.apk
 
       - name: Upload arm64-v8a APK
         uses: actions/upload-artifact@v4
         with:
           name: aves-play-arm64-v8a-${{ steps.commit_info.outputs.date }}-${{ steps.commit_info.outputs.short_sha }}
-          path: build/app/outputs/flutter-apk/*-arm64-v8a.apk
+          path: build/app/outputs/flutter-apk/aves-play-*-arm64-v8a.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -127,7 +135,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aves-play-armeabi-v7a-${{ steps.commit_info.outputs.date }}-${{ steps.commit_info.outputs.short_sha }}
-          path: build/app/outputs/flutter-apk/*-armeabi-v7a.apk
+          path: build/app/outputs/flutter-apk/aves-play-*-armeabi-v7a.apk
           if-no-files-found: warn
           retention-days: 30
 
@@ -135,7 +143,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aves-play-x86_64-${{ steps.commit_info.outputs.date }}-${{ steps.commit_info.outputs.short_sha }}
-          path: build/app/outputs/flutter-apk/*-x86_64.apk
+          path: build/app/outputs/flutter-apk/aves-play-*-x86_64.apk
           if-no-files-found: warn
           retention-days: 30
 

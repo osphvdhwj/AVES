@@ -83,12 +83,16 @@ jobs:
             --split-debug-info=build/app/outputs/symbols
           
           echo "✅ Build completed!"
+          echo "APK files generated:"
           ls -lh build/app/outputs/flutter-apk/*.apk
 
       - name: Rename APK files with version
         run: |
           VERSION="${{ github.event.inputs.version_name }}"
           cd build/app/outputs/flutter-apk
+          
+          echo "Files before rename:"
+          ls -lh *.apk
           
           for apk in app-play-*-release.apk; do
             if [ -f "$apk" ]; then
@@ -103,6 +107,10 @@ jobs:
               echo "   Size: $SIZE"
             fi
           done
+          
+          echo ""
+          echo "Files after rename:"
+          ls -lh *.apk
 
       - name: Upload arm64-v8a APK
         uses: actions/upload-artifact@v4
