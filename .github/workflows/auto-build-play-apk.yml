@@ -44,7 +44,6 @@ jobs:
             echo "Please add keystore secrets to repository settings."
             exit 1
           fi
-          # Save keystore to android/app/ directory (where Gradle expects it)
           echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks
           echo "✅ Keystore decoded successfully"
           ls -lh android/app/release.jks
@@ -64,8 +63,6 @@ jobs:
           googleApiKey=${GOOGLE_API_KEY:-<NONE>}
           EOF
           echo "✅ key.properties created"
-          echo "Contents of key.properties (passwords hidden):"
-          cat android/key.properties | sed 's/Password=.*/Password=****/g'
 
       - name: Get commit info
         id: commit_info
@@ -78,12 +75,9 @@ jobs:
       - name: Build Play flavor release APK
         run: |
           echo "🔨 Building Play flavor APK..."
-          echo "Flutter version: $(flutter --version | head -n 1)"
-          echo "Dart version: $(dart --version)"
+          echo "Flutter: $(flutter --version | head -n 1)"
+          echo "Dart: $(dart --version | head -n 1)"
           echo "Commit: ${{ steps.commit_info.outputs.short_sha }}"
-          echo "Message: ${{ steps.commit_info.outputs.commit_msg }}"
-          echo "Keystore exists: $(ls -lh android/app/release.jks)"
-          echo "Working directory: $(pwd)"
           
           flutter build apk \
             --release \
@@ -93,41 +87,18 @@ jobs:
             --obfuscate \
             --split-debug-info=build/app/outputs/symbols
           
+          echo ""
           echo "✅ Build completed!"
           echo "APK files generated:"
           ls -lh build/app/outputs/flutter-apk/*.apk
-
-      - name: Rename APK files
-        id: rename_apks
-        run: |
-          SHORT_SHA="${{ steps.commit_info.outputs.short_sha }}"
-          DATE="${{ steps.commit_info.outputs.date }}"
-          cd build/app/outputs/flutter-apk
-          
-          echo "Files before rename:"
-          ls -lh *.apk
-          
-          for apk in app-play-*-release.apk; do
-            if [ -f "$apk" ]; then
-              ABI=$(echo "$apk" | sed -n 's/app-play-\(.*\)-release.apk/\1/p')
-              NEW_NAME="aves-play-${DATE}-${SHORT_SHA}-${ABI}.apk"
-              mv "$apk" "$NEW_NAME"
-              echo "✅ Renamed: $apk → $NEW_NAME"
-              
-              SIZE=$(du -h "$NEW_NAME" | cut -f1)
-              echo "   Size: $SIZE"
-            fi
-          done
-          
           echo ""
-          echo "Files after rename:"
-          ls -lh *.apk
+          echo "Total APKs: $(ls build/app/outputs/flutter-apk/*.apk | wc -l)"
 
       - name: Upload arm64-v8a APK
         uses: actions/upload-artifact@v4
         with:
           name: aves-play-arm64-v8a-${{ steps.commit_info.outputs.date }}-${{ steps.commit_info.outputs.short_sha }}
-          path: build/app/outputs/flutter-apk/aves-play-*-arm64-v8a.apk
+          path: build/app/outputs/flutter-apk/app-play-arm64-v8a-release.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -135,7 +106,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aves-play-armeabi-v7a-${{ steps.commit_info.outputs.date }}-${{ steps.commit_info.outputs.short_sha }}
-          path: build/app/outputs/flutter-apk/aves-play-*-armeabi-v7a.apk
+          path: build/app/outputs/flutter-apk/app-play-armeabi-v7a-release.apk
           if-no-files-found: warn
           retention-days: 30
 
@@ -143,7 +114,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aves-play-x86_64-${{ steps.commit_info.outputs.date }}-${{ steps.commit_info.outputs.short_sha }}
-          path: build/app/outputs/flutter-apk/aves-play-*-x86_64.apk
+          path: build/app/outputs/flutter-apk/app-play-x86_64-release.apk
           if-no-files-found: warn
           retention-days: 30
 
@@ -158,17 +129,16 @@ jobs:
           echo "- **Build Time**: ${{ steps.commit_info.outputs.date }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Build Configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- **Flutter Version**: 3.27.4" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flutter**: 3.27.4" >> $GITHUB_STEP_SUMMARY
           echo "- **Flavor**: Play (Google Play Services)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch**: feature/ocr-integration" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Type**: Release (Signed & Obfuscated)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Split**: Per-ABI (separate APKs)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Type**: Release (Signed & Obfuscated)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Split**: Per-ABI (3 separate APKs)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Features Included" >> $GITHUB_STEP_SUMMARY
+          echo "## Features" >> $GITHUB_STEP_SUMMARY
           echo "✅ ML Kit OCR (Google Play Services)" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Google Lens-style text overlay" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Multi-language support (Latin, Chinese, Devanagari, Japanese, Korean)" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Copy, share, search text actions" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Google Lens-style overlay" >> $GITHUB_STEP_SUMMARY
+          echo "✅ 5 language families supported" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Copy, share, search actions" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## APK Files" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -176,13 +146,10 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 📥 Download" >> $GITHUB_STEP_SUMMARY
-          echo "Download APK artifacts from the **Artifacts** section above." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Recommended**: Use **arm64-v8a** APK for modern Android devices." >> $GITHUB_STEP_SUMMARY
+          echo "**Recommended**: arm64-v8a APK for modern Android devices" >> $GITHUB_STEP_SUMMARY
 
-      - name: Clean up sensitive files
+      - name: Clean up
         if: always()
         run: |
-          rm -f android/app/release.jks
-          rm -f android/key.properties
+          rm -f android/app/release.jks android/key.properties
           echo "✅ Cleanup completed"
