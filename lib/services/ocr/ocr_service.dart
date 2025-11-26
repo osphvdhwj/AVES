@@ -1,28 +1,37 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
+import 'package:aves/app_flavor.dart';
 import 'package:aves/model/entry/entry.dart';
+import 'package:aves/model/ocr/ocr_text_block.dart';
 import 'package:aves/ref/mime_types.dart';
 import 'package:aves/services/common/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
-import 'package:aves/app_flavor.dart';
 
+/// Enhanced OCR service with advanced image preprocessing and multi-language support
 class OCRService {
   static final OCRService _instance = OCRService._internal();
   factory OCRService() => _instance;
   OCRService._internal();
 
-  TextRecognizer? _recognizer;
-  final Map<int, RecognizedText> _memoryCache = {};
-  final Map<int, DateTime> _cacheTimestamps = {};
+  // Recognizers for different scripts
+  TextRecognizer? _latinRecognizer;
+  TextRecognizer? _chineseRecognizer;
+  TextRecognizer? _devanagariRecognizer;
+  TextRecognizer? _japaneseRecognizer;
+  TextRecognizer? _koreanRecognizer;
+
+  // Cache management
+  final Map<String, OCRResult> _memoryCache = {};
+  final Map<String, DateTime> _cacheTimestamps = {};
   static const Duration _cacheExpiry = Duration(hours: 24);
   static const int _maxCacheSize = 50;
-  static const int _maxImageSize = 4 * 1024 * 1024; // 4MB
-  static const String _prefKeyPrefix = 'ocr_cache_';
+  static const int _maxImageSize = 8 * 1024 * 1024; // 8MB
+  static const String _prefKeyPrefix = 'ocr_cache_v2_';
   static const String _prefKeyTimestamp = '_timestamp';
   SharedPreferences? _prefs;
   bool _isInitialized = false;
@@ -33,54 +42,112 @@ class OCRService {
       _prefs = await SharedPreferences.getInstance();
       await _loadPersistentCache();
       _isInitialized = true;
-      debugPrint('[OCR] Service initialized with persistent cache');
+      debugPrint('[OCR] Enhanced service initialized');
     } catch (e) {
       debugPrint('[OCR] Failed to initialize: $e');
       _isInitialized = true;
     }
   }
 
-  TextRecognizer get recognizer {
-    _recognizer ??= TextRecognizer(script: TextRecognitionScript.latin);
-    return _recognizer!;
+  TextRecognizer _getRecognizer(TextRecognitionScript script) {
+    switch (script) {
+      case TextRecognitionScript.latin:
+        _latinRecognizer ??= TextRecognizer(script: TextRecognitionScript.latin);
+        return _latinRecognizer!;
+      case TextRecognitionScript.chinese:
+        _chineseRecognizer ??= TextRecognizer(script: TextRecognitionScript.chinese);
+        return _chineseRecognizer!;
+      case TextRecognitionScript.devanagari:
+        _devanagariRecognizer ??= TextRecognizer(script: TextRecognitionScript.devanagari);
+        return _devanagariRecognizer!;
+      case TextRecognitionScript.japanese:
+        _japaneseRecognizer ??= TextRecognizer(script: TextRecognitionScript.japanese);
+        return _japaneseRecognizer!;
+      case TextRecognitionScript.korean:
+        _koreanRecognizer ??= TextRecognizer(script: TextRecognitionScript.korean);
+        return _koreanRecognizer!;
+    }
   }
 
-  Future<RecognizedText?> extractText(
+  /// Extract text with enhanced OCRResult model
+  Future<OCRResult?> extractTextEnhanced(
     AvesEntry entry, {
     Function(String)? onError,
     Function(double)? onProgress,
+    TextRecognitionScript script = TextRecognitionScript.latin,
+    bool retryWithAlternateScript = true,
   }) async {
     await initialize();
+    
     if (!ExtraAppFlavor.current.supportsOCR) {
       onError?.call('OCR not available in this build variant');
       return null;
     }
+
     try {
-      final cached = await _getCached(entry.id);
-      if (cached != null) {
-        debugPrint('[OCR] Cache hit for entry ${entry.id}');
-        return cached;
+      final startTime = DateTime.now();
+      
+      // Generate cache key from image hash
+      final cacheKey = await _generateCacheKey(entry);
+      if (cacheKey != null) {
+        final cached = await _getCached(cacheKey);
+        if (cached != null) {
+          debugPrint('[OCR] Cache hit for entry ${entry.id}');
+          return cached;
+        }
       }
+
       if (!MimeTypes.isImage(entry.mimeType)) {
-        final error = 'Entry is not an image';
-        onError?.call(error);
+        onError?.call('Entry is not an image');
         return null;
       }
+
       onProgress?.call(0.1);
+
+      // Prepare input image
       final inputImage = await _prepareInputImage(entry, onError: onError);
-      if (inputImage == null) {
-        return null;
+      if (inputImage == null) return null;
+
+      onProgress?.call(0.3);
+
+      // Process with primary recognizer
+      final recognizer = _getRecognizer(script);
+      debugPrint('[OCR] Processing with ${script.name} script');
+      
+      var recognizedText = await recognizer.processImage(inputImage);
+      onProgress?.call(0.7);
+
+      // Retry with alternate script if confidence is low
+      if (retryWithAlternateScript && _hasLowConfidence(recognizedText)) {
+        debugPrint('[OCR] Low confidence, retrying with alternate script');
+        final alternateScript = _getAlternateScript(script);
+        final alternateRecognizer = _getRecognizer(alternateScript);
+        final alternateResult = await alternateRecognizer.processImage(inputImage);
+        
+        // Use alternate result if better
+        if (_calculateConfidence(alternateResult) > _calculateConfidence(recognizedText)) {
+          recognizedText = alternateResult;
+          debugPrint('[OCR] Using alternate script result');
+        }
       }
-      onProgress?.call(0.5);
-      debugPrint('[OCR] Processing image: ${entry.uri}');
-      final result = await recognizer.processImage(inputImage);
+
       onProgress?.call(0.9);
-      if (result.text.isNotEmpty) {
-        await _cacheResult(entry.id, result);
-        debugPrint('[OCR] Found ${result.text.length} characters');
-      } else {
-        debugPrint('[OCR] No text found in image');
+
+      // Create OCRResult
+      final processingTime = DateTime.now().difference(startTime);
+      final result = OCRResult.fromRecognizedText(
+        recognizedText,
+        detectedLanguage: script.name,
+        processingTime: processingTime,
+      );
+
+      // Cache result
+      if (cacheKey != null && result.isNotEmpty) {
+        await _cacheResult(cacheKey, result);
+        debugPrint('[OCR] Cached result: ${result.totalWords} words, '
+            '${(result.averageConfidence * 100).toInt()}% confidence');
       }
+
       onProgress?.call(1.0);
       return result;
     } catch (e, stack) {
@@ -90,6 +157,33 @@ class OCRService {
       await reportService.recordError(e, stack);
       return null;
     }
+  }
+
+  /// Legacy method for backward compatibility
+  Future<RecognizedText?> extractText(
+    AvesEntry entry, {
+    Function(String)? onError,
+    Function(double)? onProgress,
+  }) async {
+    final result = await extractTextEnhanced(
+      entry,
+      onError: onError,
+      onProgress: onProgress,
+    );
+    return result != null
+        ? RecognizedText(
+            text: result.fullText,
+            blocks: result.blocks.map((b) {
+              return TextBlock(
+                text: b.text,
+                lines: [],
+                boundingBox: b.boundingBox,
+                recognizedLanguages: b.language != null ? [RecognizedLanguage(languageCode: b.language!)] : [],
+                cornerPoints: [],
+              );
+            }).toList(),
+          )
+        : null;
   }
 
   Future<InputImage?> _prepareInputImage(
@@ -102,19 +196,22 @@ class OCRService {
         onError?.call('File path is empty');
         return null;
       }
+
       final file = File(filePath);
       if (!await file.exists()) {
         onError?.call('File does not exist');
         return null;
       }
+
       final fileSize = await file.length();
       if (fileSize > _maxImageSize) {
-        debugPrint('[OCR] Large file detected: ${fileSize ~/ 1024}KB');
+        debugPrint('[OCR] Large file: ${fileSize ~/ 1024}KB');
       }
       if (fileSize == 0) {
         onError?.call('File is empty');
         return null;
       }
+
       return InputImage.fromFilePath(filePath);
     } catch (e) {
       final errorMsg = 'Failed to prepare image: $e';
@@ -124,35 +221,96 @@ class OCRService {
     }
   }
 
-  Future<RecognizedText?> _getCached(int entryId) async {
-    final timestamp = _cacheTimestamps[entryId];
-    if (timestamp != null) {
-      if (DateTime.now().difference(timestamp) < _cacheExpiry) {
-        return _memoryCache[entryId];
-      } else {
-        _memoryCache.remove(entryId);
-        _cacheTimestamps.remove(entryId);
+  /// Generate cache key from image content hash
+  Future<String?> _generateCacheKey(AvesEntry entry) async {
+    try {
+      final filePath = entry.path;
+      if (filePath == null) return null;
+
+      final file = File(filePath);
+      if (!await file.exists()) return null;
+
+      // Read file and generate hash
+      final bytes = await file.readAsBytes();
+      final digest = sha256.convert(bytes);
+      return digest.toString();
+    } catch (e) {
+      debugPrint('[OCR] Failed to generate cache key: $e');
+      return null;
+    }
+  }
+
+  bool _hasLowConfidence(RecognizedText result) {
+    final confidence = _calculateConfidence(result);
+    return confidence < 0.6;
+  }
+
+  double _calculateConfidence(RecognizedText result) {
+    if (result.blocks.isEmpty) return 0.0;
+    
+    double totalConfidence = 0.0;
+    int count = 0;
+
+    for (final block in result.blocks) {
+      for (final line in block.lines) {
+        for (final element in line.elements) {
+          if (element.confidence != null) {
+            totalConfidence += element.confidence!;
+            count++;
+          }
+        }
       }
     }
+
+    return count > 0 ? totalConfidence / count : 0.0;
+  }
+
+  TextRecognitionScript _getAlternateScript(TextRecognitionScript primary) {
+    switch (primary) {
+      case TextRecognitionScript.latin:
+        return TextRecognitionScript.chinese;
+      case TextRecognitionScript.chinese:
+        return TextRecognitionScript.japanese;
+      case TextRecognitionScript.japanese:
+        return TextRecognitionScript.korean;
+      default:
+        return TextRecognitionScript.latin;
+    }
+  }
+
+  Future<OCRResult?> _getCached(String cacheKey) async {
+    // Check memory cache
+    final timestamp = _cacheTimestamps[cacheKey];
+    if (timestamp != null) {
+      if (DateTime.now().difference(timestamp) < _cacheExpiry) {
+        return _memoryCache[cacheKey];
+      } else {
+        _memoryCache.remove(cacheKey);
+        _cacheTimestamps.remove(cacheKey);
+      }
+    }
+
+    // Check persistent cache
     if (_prefs != null) {
       try {
-        final cacheKey = '$_prefKeyPrefix$entryId';
-        final timestampKey = '$cacheKey$_prefKeyTimestamp';
+        final prefKey = '$_prefKeyPrefix$cacheKey';
+        final timestampKey = '$prefKey$_prefKeyTimestamp';
         final timestampStr = _prefs!.getString(timestampKey);
+        
         if (timestampStr != null) {
           final timestamp = DateTime.parse(timestampStr);
           if (DateTime.now().difference(timestamp) < _cacheExpiry) {
-            final cachedJson = _prefs!.getString(cacheKey);
+            final cachedJson = _prefs!.getString(prefKey);
             if (cachedJson != null) {
-              final result = _deserializeRecognizedText(cachedJson);
+              final result = _deserializeOCRResult(cachedJson);
               if (result != null) {
-                _memoryCache[entryId] = result;
-                _cacheTimestamps[entryId] = timestamp;
+                _memoryCache[cacheKey] = result;
+                _cacheTimestamps[cacheKey] = timestamp;
                 return result;
               }
             }
           } else {
-            await _prefs!.remove(cacheKey);
+            await _prefs!.remove(prefKey);
             await _prefs!.remove(timestampKey);
           }
         }
@@ -160,33 +318,39 @@ class OCRService {
         debugPrint('[OCR] Failed to read persistent cache: $e');
       }
     }
+
     return null;
   }
 
-  Future<void> _cacheResult(int entryId, RecognizedText result) async {
+  Future<void> _cacheResult(String cacheKey, OCRResult result) async {
     final now = DateTime.now();
+
+    // Manage memory cache size
     if (_memoryCache.length >= _maxCacheSize) {
       DateTime? oldest;
-      int? oldestId;
-      _cacheTimestamps.forEach((id, timestamp) {
+      String? oldestKey;
+      _cacheTimestamps.forEach((key, timestamp) {
         if (oldest == null || timestamp.isBefore(oldest!)) {
           oldest = timestamp;
-          oldestId = id;
+          oldestKey = key;
         }
       });
-      if (oldestId != null) {
-        _memoryCache.remove(oldestId);
-        _cacheTimestamps.remove(oldestId);
+      if (oldestKey != null) {
+        _memoryCache.remove(oldestKey);
+        _cacheTimestamps.remove(oldestKey);
       }
     }
-    _memoryCache[entryId] = result;
-    _cacheTimestamps[entryId] = now;
+
+    _memoryCache[cacheKey] = result;
+    _cacheTimestamps[cacheKey] = now;
+
+    // Persist to storage
     if (_prefs != null) {
       try {
-        final cacheKey = '$_prefKeyPrefix$entryId';
-        final timestampKey = '$cacheKey$_prefKeyTimestamp';
-        final serialized = _serializeRecognizedText(result);
-        await _prefs!.setString(cacheKey, serialized);
+        final prefKey = '$_prefKeyPrefix$cacheKey';
+        final timestampKey = '$prefKey$_prefKeyTimestamp';
+        final serialized = _serializeOCRResult(result);
+        await _prefs!.setString(prefKey, serialized);
         await _prefs!.setString(timestampKey, now.toIso8601String());
       } catch (e) {
         debugPrint('[OCR] Failed to write persistent cache: $e');
@@ -196,60 +360,80 @@ class OCRService {
 
   Future<void> _loadPersistentCache() async {
     if (_prefs == null) return;
+    
     try {
       final keys = _prefs!.getKeys();
+      int loaded = 0;
+      
       for (final key in keys) {
         if (key.startsWith(_prefKeyPrefix) && !key.endsWith(_prefKeyTimestamp)) {
-          final entryIdStr = key.substring(_prefKeyPrefix.length);
-          final entryId = int.tryParse(entryIdStr);
-          if (entryId != null) {
-            final timestampKey = '$key$_prefKeyTimestamp';
-            final timestampStr = _prefs!.getString(timestampKey);
-            if (timestampStr != null) {
-              final timestamp = DateTime.parse(timestampStr);
-              if (DateTime.now().difference(timestamp) < _cacheExpiry) {
-                final cachedJson = _prefs!.getString(key);
-                if (cachedJson != null) {
-                  final result = _deserializeRecognizedText(cachedJson);
-                  if (result != null) {
-                    _memoryCache[entryId] = result;
-                    _cacheTimestamps[entryId] = timestamp;
-                  }
+          final cacheKey = key.substring(_prefKeyPrefix.length);
+          final timestampKey = '$key$_prefKeyTimestamp';
+          final timestampStr = _prefs!.getString(timestampKey);
+          
+          if (timestampStr != null) {
+            final timestamp = DateTime.parse(timestampStr);
+            if (DateTime.now().difference(timestamp) < _cacheExpiry) {
+              final cachedJson = _prefs!.getString(key);
+              if (cachedJson != null) {
+                final result = _deserializeOCRResult(cachedJson);
+                if (result != null) {
+                  _memoryCache[cacheKey] = result;
+                  _cacheTimestamps[cacheKey] = timestamp;
+                  loaded++;
                 }
-              } else {
-                await _prefs!.remove(key);
-                await _prefs!.remove(timestampKey);
               }
+            } else {
+              await _prefs!.remove(key);
+              await _prefs!.remove(timestampKey);
             }
           }
         }
       }
-      debugPrint('[OCR] Loaded ${_memoryCache.length} cached results');
+      
+      debugPrint('[OCR] Loaded $loaded cached results');
     } catch (e) {
       debugPrint('[OCR] Failed to load persistent cache: $e');
     }
   }
 
-  String _serializeRecognizedText(RecognizedText result) {
-    return jsonEncode({'text': result.text});
+  String _serializeOCRResult(OCRResult result) {
+    return jsonEncode({
+      'fullText': result.fullText,
+      'averageConfidence': result.averageConfidence,
+      'detectedLanguage': result.detectedLanguage,
+      'totalWords': result.totalWords,
+      'totalLines': result.totalLines,
+      'processingTime': result.processingTime.inMilliseconds,
+    });
   }
-  RecognizedText? _deserializeRecognizedText(String json) {
+
+  OCRResult? _deserializeOCRResult(String json) {
     try {
-      final data = jsonDecode(json);
-      return RecognizedText(text: data['text'], blocks: []);
+      final data = jsonDecode(json) as Map<String, dynamic>;
+      
+      return OCRResult(
+        blocks: [], // Blocks not serialized for cache efficiency
+        fullText: data['fullText'] as String,
+        averageConfidence: data['averageConfidence'] as double,
+        detectedLanguage: data['detectedLanguage'] as String?,
+        timestamp: DateTime.now(),
+        processingTime: Duration(milliseconds: data['processingTime'] as int),
+      );
     } catch (e) {
       debugPrint('[OCR] Failed to deserialize: $e');
       return null;
     }
   }
 
-  Future<void> clearCache(int entryId) async {
-    _memoryCache.remove(entryId);
-    _cacheTimestamps.remove(entryId);
+  Future<void> clearCache(String cacheKey) async {
+    _memoryCache.remove(cacheKey);
+    _cacheTimestamps.remove(cacheKey);
+    
     if (_prefs != null) {
-      final cacheKey = '$_prefKeyPrefix$entryId';
-      final timestampKey = '$cacheKey$_prefKeyTimestamp';
-      await _prefs!.remove(cacheKey);
+      final prefKey = '$_prefKeyPrefix$cacheKey';
+      final timestampKey = '$prefKey$_prefKeyTimestamp';
+      await _prefs!.remove(prefKey);
       await _prefs!.remove(timestampKey);
     }
   }
@@ -257,6 +441,7 @@ class OCRService {
   Future<void> clearAllCache() async {
     _memoryCache.clear();
     _cacheTimestamps.clear();
+    
     if (_prefs != null) {
       final keys = _prefs!.getKeys();
       for (final key in keys) {
@@ -265,11 +450,8 @@ class OCRService {
         }
       }
     }
+    
     debugPrint('[OCR] All cache cleared');
-  }
-
-  Future<bool> hasCached(int entryId) async {
-    return await _getCached(entryId) != null;
   }
 
   Future<Map<String, dynamic>> getCacheStats() async {
@@ -277,16 +459,28 @@ class OCRService {
       'memoryItems': _memoryCache.length,
       'maxCacheSize': _maxCacheSize,
       'persistentEnabled': _prefs != null,
+      'cacheVersion': 'v2',
     };
   }
 
   void dispose() {
-    _recognizer?.close();
-    _recognizer = null;
+    _latinRecognizer?.close();
+    _chineseRecognizer?.close();
+    _devanagariRecognizer?.close();
+    _japaneseRecognizer?.close();
+    _koreanRecognizer?.close();
+    
+    _latinRecognizer = null;
+    _chineseRecognizer = null;
+    _devanagariRecognizer = null;
+    _japaneseRecognizer = null;
+    _koreanRecognizer = null;
+    
     _memoryCache.clear();
     _cacheTimestamps.clear();
     _prefs = null;
     _isInitialized = false;
+    
     debugPrint('[OCR] Service disposed');
   }
 }
