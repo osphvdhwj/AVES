@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:image/image.dart' as img;
 
 import 'package:aves/app_flavor.dart';
 import 'package:aves/model/entry/entry.dart';
@@ -12,16 +14,15 @@ import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Enhanced OCR service with advanced image preprocessing and multi-language support
+/// Enhanced OCR service with advanced image preprocessing for maximum accuracy
 class OCRService {
   static final OCRService _instance = OCRService._internal();
   factory OCRService() => _instance;
   OCRService._internal();
 
-  // Recognizers for different scripts
+  // Recognizers for supported scripts
   TextRecognizer? _latinRecognizer;
   TextRecognizer? _chineseRecognizer;
-  TextRecognizer? _devanagariRecognizer;
   TextRecognizer? _japaneseRecognizer;
   TextRecognizer? _koreanRecognizer;
 
@@ -30,8 +31,8 @@ class OCRService {
   final Map<String, DateTime> _cacheTimestamps = {};
   static const Duration _cacheExpiry = Duration(hours: 24);
   static const int _maxCacheSize = 50;
-  static const int _maxImageSize = 8 * 1024 * 1024; // 8MB
-  static const String _prefKeyPrefix = 'ocr_cache_v2_';
+  static const int _maxImageSize = 10 * 1024 * 1024; // 10MB
+  static const String _prefKeyPrefix = 'ocr_cache_v3_';
   static const String _prefKeyTimestamp = '_timestamp';
   SharedPreferences? _prefs;
   bool _isInitialized = false;
@@ -42,7 +43,7 @@ class OCRService {
       _prefs = await SharedPreferences.getInstance();
       await _loadPersistentCache();
       _isInitialized = true;
-      debugPrint('[OCR] Enhanced service initialized');
+      debugPrint('[OCR] Enhanced service initialized with preprocessing');
     } catch (e) {
       debugPrint('[OCR] Failed to initialize: $e');
       _isInitialized = true;
@@ -57,25 +58,26 @@ class OCRService {
       case TextRecognitionScript.chinese:
         _chineseRecognizer ??= TextRecognizer(script: TextRecognitionScript.chinese);
         return _chineseRecognizer!;
-      case TextRecognitionScript.devanagiri:
-        _devanagariRecognizer ??= TextRecognizer(script: TextRecognitionScript.devanagiri);
-        return _devanagariRecognizer!;
       case TextRecognitionScript.japanese:
         _japaneseRecognizer ??= TextRecognizer(script: TextRecognitionScript.japanese);
         return _japaneseRecognizer!;
       case TextRecognitionScript.korean:
         _koreanRecognizer ??= TextRecognizer(script: TextRecognitionScript.korean);
         return _koreanRecognizer!;
+      default:
+        _latinRecognizer ??= TextRecognizer(script: TextRecognitionScript.latin);
+        return _latinRecognizer!;
     }
   }
 
-  /// Extract text with enhanced OCRResult model
+  /// Extract text with enhanced OCRResult model and preprocessing
   Future<OCRResult?> extractTextEnhanced(
     AvesEntry entry, {
     Function(String)? onError,
     Function(double)? onProgress,
     TextRecognitionScript script = TextRecognitionScript.latin,
     bool retryWithAlternateScript = true,
+    bool enablePreprocessing = true,
   }) async {
     await initialize();
     
@@ -104,8 +106,13 @@ class OCRService {
 
       onProgress?.call(0.1);
 
-      // Prepare input image
-      final inputImage = await _prepareInputImage(entry, onError: onError);
+      // Prepare and preprocess input image
+      final inputImage = await _prepareInputImage(
+        entry,
+        onError: onError,
+        enablePreprocessing: enablePreprocessing,
+        onProgress: (p) => onProgress?.call(0.1 + (p * 0.2)),
+      );
       if (inputImage == null) return null;
 
       onProgress?.call(0.3);
@@ -119,7 +126,7 @@ class OCRService {
 
       // Retry with alternate script if confidence is low
       if (retryWithAlternateScript && _hasLowConfidence(recognizedText)) {
-        debugPrint('[OCR] Low confidence, retrying with alternate script');
+        debugPrint('[OCR] Low confidence (${(_calculateConfidence(recognizedText) * 100).toInt()}%), retrying with alternate script');
         final alternateScript = _getAlternateScript(script);
         final alternateRecognizer = _getRecognizer(alternateScript);
         final alternateResult = await alternateRecognizer.processImage(inputImage);
@@ -127,7 +134,7 @@ class OCRService {
         // Use alternate result if better
         if (_calculateConfidence(alternateResult) > _calculateConfidence(recognizedText)) {
           recognizedText = alternateResult;
-          debugPrint('[OCR] Using alternate script result');
+          debugPrint('[OCR] Using alternate script result (${(_calculateConfidence(recognizedText) * 100).toInt()}% confidence)');
         }
       }
 
@@ -145,6 +152,7 @@ class OCRService {
       if (cacheKey != null && result.isNotEmpty) {
         await _cacheResult(cacheKey, result);
         debugPrint('[OCR] Cached result: ${result.totalWords} words, '
+            '${result.totalCharacters} chars, '
             '${(result.averageConfidence * 100).toInt()}% confidence');
       }
 
@@ -210,6 +218,8 @@ class OCRService {
   Future<InputImage?> _prepareInputImage(
     AvesEntry entry, {
     Function(String)? onError,
+    bool enablePreprocessing = true,
+    Function(double)? onProgress,
   }) async {
     try {
       final filePath = entry.path;
@@ -233,6 +243,23 @@ class OCRService {
         return null;
       }
 
+      onProgress?.call(0.1);
+
+      // Apply preprocessing if enabled
+      if (enablePreprocessing) {
+        try {
+          debugPrint('[OCR] Applying image preprocessing...');
+          final processedPath = await _preprocessImage(filePath, onProgress);
+          if (processedPath != null) {
+            debugPrint('[OCR] Using preprocessed image');
+            return InputImage.fromFilePath(processedPath);
+          }
+        } catch (e) {
+          debugPrint('[OCR] Preprocessing failed, using original: $e');
+        }
+      }
+
+      onProgress?.call(1.0);
       return InputImage.fromFilePath(filePath);
     } catch (e) {
       final errorMsg = 'Failed to prepare image: $e';
@@ -240,6 +267,120 @@ class OCRService {
       onError?.call(errorMsg);
       return null;
     }
+  }
+
+  /// Preprocess image for better OCR accuracy
+  Future<String?> _preprocessImage(String imagePath, Function(double)? onProgress) async {
+    try {
+      onProgress?.call(0.2);
+
+      // Read image
+      final imageBytes = await File(imagePath).readAsBytes();
+      img.Image? image = img.decodeImage(imageBytes);
+      if (image == null) return null;
+
+      onProgress?.call(0.4);
+
+      // 1. Convert to grayscale for better text recognition
+      image = img.grayscale(image);
+
+      onProgress?.call(0.5);
+
+      // 2. Increase contrast
+      image = img.contrast(image, contrast: 130);
+
+      onProgress?.call(0.6);
+
+      // 3. Adjust brightness
+      image = img.brightness(image, brightness: 10);
+
+      onProgress?.call(0.7);
+
+      // 4. Sharpen for better edge detection
+      image = img.convolution(image, filter: [
+        0, -1,  0,
+       -1,  5, -1,
+        0, -1,  0,
+      ]);
+
+      onProgress?.call(0.8);
+
+      // 5. Apply threshold for binarization (better for text)
+      final threshold = _calculateOtsuThreshold(image);
+      for (int y = 0; y < image.height; y++) {
+        for (int x = 0; x < image.width; x++) {
+          final pixel = image.getPixel(x, y);
+          final luminance = img.getLuminance(pixel);
+          final newColor = luminance > threshold ? img.ColorRgb8(255, 255, 255) : img.ColorRgb8(0, 0, 0);
+          image.setPixel(x, y, newColor);
+        }
+      }
+
+      onProgress?.call(0.9);
+
+      // Save preprocessed image to temp file
+      final tempDir = Directory.systemTemp;
+      final tempPath = '${tempDir.path}/ocr_preprocessed_${DateTime.now().millisecondsSinceEpoch}.png';
+      final processedFile = File(tempPath);
+      await processedFile.writeAsBytes(img.encodePng(image));
+
+      onProgress?.call(1.0);
+
+      debugPrint('[OCR] Preprocessed image saved: $tempPath');
+      return tempPath;
+    } catch (e) {
+      debugPrint('[OCR] Image preprocessing error: $e');
+      return null;
+    }
+  }
+
+  /// Calculate Otsu's threshold for optimal binarization
+  int _calculateOtsuThreshold(img.Image image) {
+    // Build histogram
+    final histogram = List<int>.filled(256, 0);
+    for (int y = 0; y < image.height; y++) {
+      for (int x = 0; x < image.width; x++) {
+        final pixel = image.getPixel(x, y);
+        final luminance = img.getLuminance(pixel).toInt();
+        histogram[luminance]++;
+      }
+    }
+
+    // Calculate total pixels
+    final total = image.width * image.height;
+
+    // Calculate Otsu threshold
+    double sum = 0;
+    for (int i = 0; i < 256; i++) {
+      sum += i * histogram[i];
+    }
+
+    double sumB = 0;
+    int wB = 0;
+    int wF = 0;
+    double maxVariance = 0;
+    int threshold = 0;
+
+    for (int i = 0; i < 256; i++) {
+      wB += histogram[i];
+      if (wB == 0) continue;
+
+      wF = total - wB;
+      if (wF == 0) break;
+
+      sumB += i * histogram[i];
+      final mB = sumB / wB;
+      final mF = (sum - sumB) / wF;
+
+      final variance = wB * wF * (mB - mF) * (mB - mF);
+
+      if (variance > maxVariance) {
+        maxVariance = variance;
+        threshold = i;
+      }
+    }
+
+    return threshold;
   }
 
   /// Generate cache key from image content hash
@@ -263,7 +404,7 @@ class OCRService {
 
   bool _hasLowConfidence(RecognizedText result) {
     final confidence = _calculateConfidence(result);
-    return confidence < 0.6;
+    return confidence < 0.65; // Slightly higher threshold
   }
 
   double _calculateConfidence(RecognizedText result) {
@@ -472,6 +613,23 @@ class OCRService {
       }
     }
     
+    // Clean up temp preprocessed images
+    try {
+      final tempDir = Directory.systemTemp;
+      final files = tempDir.listSync();
+      for (final file in files) {
+        if (file.path.contains('ocr_preprocessed_')) {
+          try {
+            file.deleteSync();
+          } catch (e) {
+            // Ignore errors
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[OCR] Failed to clean temp files: $e');
+    }
+    
     debugPrint('[OCR] All cache cleared');
   }
 
@@ -480,20 +638,19 @@ class OCRService {
       'memoryItems': _memoryCache.length,
       'maxCacheSize': _maxCacheSize,
       'persistentEnabled': _prefs != null,
-      'cacheVersion': 'v2',
+      'cacheVersion': 'v3',
+      'preprocessingEnabled': true,
     };
   }
 
   void dispose() {
     _latinRecognizer?.close();
     _chineseRecognizer?.close();
-    _devanagariRecognizer?.close();
     _japaneseRecognizer?.close();
     _koreanRecognizer?.close();
     
     _latinRecognizer = null;
     _chineseRecognizer = null;
-    _devanagariRecognizer = null;
     _japaneseRecognizer = null;
     _koreanRecognizer = null;
     
