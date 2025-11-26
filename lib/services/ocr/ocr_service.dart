@@ -286,13 +286,11 @@ class OCRService {
 
       onProgress?.call(0.5);
 
-      // 2. Increase contrast
-      image = img.contrast(image, contrast: 130);
-
-      onProgress?.call(0.6);
-
-      // 3. Adjust brightness
-      image = img.brightness(image, brightness: 10);
+      // 2 & 3. Adjust contrast and brightness using adjustColor
+      image = img.adjustColor(image, 
+        contrast: 1.3,      // 30% increase in contrast
+        brightness: 0.05,   // Slight brightness increase
+      );
 
       onProgress?.call(0.7);
 
