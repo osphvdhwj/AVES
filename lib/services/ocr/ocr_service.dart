@@ -57,8 +57,8 @@ class OCRService {
       case TextRecognitionScript.chinese:
         _chineseRecognizer ??= TextRecognizer(script: TextRecognitionScript.chinese);
         return _chineseRecognizer!;
-      case TextRecognitionScript.devanagari:
-        _devanagariRecognizer ??= TextRecognizer(script: TextRecognitionScript.devanagari);
+      case TextRecognitionScript.devanagiri:
+        _devanagariRecognizer ??= TextRecognizer(script: TextRecognitionScript.devanagiri);
         return _devanagariRecognizer!;
       case TextRecognitionScript.japanese:
         _japaneseRecognizer ??= TextRecognizer(script: TextRecognitionScript.japanese);
@@ -165,25 +165,46 @@ class OCRService {
     Function(String)? onError,
     Function(double)? onProgress,
   }) async {
-    final result = await extractTextEnhanced(
-      entry,
-      onError: onError,
-      onProgress: onProgress,
-    );
-    return result != null
-        ? RecognizedText(
-            text: result.fullText,
-            blocks: result.blocks.map((b) {
-              return TextBlock(
-                text: b.text,
-                lines: [],
-                boundingBox: b.boundingBox,
-                recognizedLanguages: b.language != null ? [RecognizedLanguage(languageCode: b.language!)] : [],
-                cornerPoints: [],
-              );
-            }).toList(),
-          )
-        : null;
+    await initialize();
+    if (!ExtraAppFlavor.current.supportsOCR) {
+      onError?.call('OCR not available in this build variant');
+      return null;
+    }
+    try {
+      final cached = await _getCached(entry.id.toString());
+      if (cached != null) {
+        debugPrint('[OCR] Cache hit for entry ${entry.id}');
+        return RecognizedText(text: cached.fullText, blocks: []);
+      }
+      if (!MimeTypes.isImage(entry.mimeType)) {
+        final error = 'Entry is not an image';
+        onError?.call(error);
+        return null;
+      }
+      onProgress?.call(0.1);
+      final inputImage = await _prepareInputImage(entry, onError: onError);
+      if (inputImage == null) {
+        return null;
+      }
+      onProgress?.call(0.5);
+      debugPrint('[OCR] Processing image: ${entry.uri}');
+      final recognizer = _getRecognizer(TextRecognitionScript.latin);
+      final result = await recognizer.processImage(inputImage);
+      onProgress?.call(0.9);
+      if (result.text.isNotEmpty) {
+        debugPrint('[OCR] Found ${result.text.length} characters');
+      } else {
+        debugPrint('[OCR] No text found in image');
+      }
+      onProgress?.call(1.0);
+      return result;
+    } catch (e, stack) {
+      final errorMsg = 'Failed to extract text: $e';
+      debugPrint('[OCR] $errorMsg');
+      onError?.call(errorMsg);
+      await reportService.recordError(e, stack);
+      return null;
+    }
   }
 
   Future<InputImage?> _prepareInputImage(
